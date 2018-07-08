@@ -1,8 +1,16 @@
-package main
+package kiosk
 
 const firefoxstring = `
-#nav-bar { display: none }
-`
+/* * Do not remove the @namespace line -- it's required for correct functioning */
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"); /* set default namespace to XUL */
+
+/*
+* Hide tab bar, navigation bar and scrollbars
+* !important may be added to force override, but not necessary
+*/
+#TabsToolbar {visibility: collapse;}
+#navigator-toolbox {visibility: collapse;}
+#content browser {margin-right: -14px; margin-bottom: -14px;}`
 const osascript = `
 tell application "Safari"
   activate

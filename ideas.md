@@ -22,4 +22,4 @@ exec
 `safari`
 
 ## Checking for browsers
-Have `x-default-browser` (npm) as a reference.
+Have `x-default-Browser` (npm) as a reference.

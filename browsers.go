@@ -1,11 +1,10 @@
-package main
+package kiosk
 
 import (
-	"errors"
-	"fmt"
 	"io/ioutil"
 	"os"
 	"path"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -13,15 +12,20 @@ import (
 	homedir "github.com/mitchellh/go-homedir"
 )
 
-//a browser has a printable name, a way to execute it and a "rank" (if chrome and ie are both installed, choose chrome instead of ie because of better support for kiosk mode and other features)
-//rank 0 is the most preffered rank.
-type browser struct {
-	name string
-	rank int
-	exec func(url string) error
+//Browser has a printable name, a way to execute it and a "rank" (if chrome and ie are both installed, choose chrome instead of ie because of better support for kiosk mode and other features). Lower rank is better
+type Browser struct {
+	Name string
+	Rank int
+	Exec func(url string) error
 }
 
-type browserSlice []browser
+//BrowserOptions should be passed to .Exec in Browser
+// type BrowserOptions struct {
+// 	Dimensions []int
+// 	FullScreen bool
+// }
+
+type browserSlice []Browser
 
 func (b browserSlice) Len() int {
 	return len(b)
@@ -30,12 +34,12 @@ func (b browserSlice) Swap(i, j int) {
 	b[i], b[j] = b[j], b[i]
 }
 func (b browserSlice) Less(i, j int) bool {
-	return b[i].rank < b[j].rank
+	return b[i].Rank < b[j].Rank
 }
 
-//all browsers are held in a map, accessible with their 'shorthand' representations
-var browsers = map[string]browser{
-	"firefox": browser{
+//Browsers are held in a map, accessible with their 'shorthand' representations
+var Browsers = map[string]Browser{
+	"firefox": Browser{
 		"Firefox",
 		1,
 		func(url string) error {
@@ -51,59 +55,78 @@ var browsers = map[string]browser{
 				return er
 			}
 
-			//try to find a .default folder
+			//try to find a .noui folder
 			var dir string = ""
 			for _, f := range files {
-				if strings.Index(f.Name(), ".default") > -1 {
+				if strings.Index(f.Name(), ".noui") > -1 {
 					dir = f.Name()
 				}
 			}
+			//make that profile!
 			if dir == "" {
-				return errors.New("ERR: Could not find ~/.mozilla/firefox/ABC123.default")
+				out, er := spawnCmd("firefox", "-CreateProfile", "noui", "-no-remote")
+				if er != nil {
+					return er
+				}
+				dir = strings.Replace(out, "Success: created profile 'noui' at '", "", 0)
+				dir = dir[0 : len(dir)-1] //cut off last '
 			}
 
-			root = path.Join(root, "chrome")
+			root = path.Join(root, dir, "chrome")
 			os.MkdirAll(root, os.ModePerm)
 
-			//check if userChrome already exists
 			file := path.Join(root, "userChrome.css")
-			if _, err := os.Stat(file); os.IsNotExist(err) {
-				fmt.Println("INFO: userChrome.css already exists. Appending to file now.")
+			var f *os.File = nil
+
+			//check if userChrome already exists
+			if _, err := os.Stat(file); !os.IsNotExist(err) {
+				str, _ := ioutil.ReadFile(file)
+				//if this css code is not already in userChrome.css
+				if strings.Index((string)(str), firefoxstring) == -1 {
+					//append to userChrome.css
+					f, err = os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0600)
+					if err != nil {
+						return err
+					}
+				}
+				// fmt.Println("INFO: userChrome.css already exists. Appending to file now.")
+
+			} else {
+				f, err = os.Create(file)
+				if err != nil {
+					return err
+				}
 			}
 
-			//append to userChrome.css
-			f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0600)
-			if err != nil {
-				return err
+			if f != nil {
+				defer f.Close()
+
+				if _, err = f.WriteString(firefoxstring); err != nil {
+					return err
+				}
 			}
 
-			defer f.Close()
-
-			if _, err = f.WriteString(firefoxstring); err != nil {
-				return err
-			}
-
-			return runCmd("firefox", url)
+			return runCmd("firefox", "-new-instance", "-P", "noui", url)
 		}},
-	"ie": browser{
+	"ie": Browser{
 		"Internet Explorer",
 		2,
 		func(url string) error {
 			return runCmd("iexplore", "-k", url)
 		}},
-	"chrome": browser{
+	"chrome": Browser{
 		"Google Chrome",
 		0,
 		func(url string) error {
-			return runCmd("chrome", "--kiosk", url)
+			return runCmd("chrome", strings.Join([]string{"--app", url}, "="))
 		}},
-	"chromium": browser{
+	"chromium": Browser{
 		"Chromium",
 		0,
 		func(url string) error {
-			return runCmd("chromium", "--kiosk", url)
+			return runCmd("chromium", strings.Join([]string{"--app", url}, "="))
 		}},
-	"safari": browser{
+	"safari": Browser{
 		"Safari",
 		2,
 		func(url string) error {
@@ -111,42 +134,51 @@ var browsers = map[string]browser{
 			return runCmd("osascript", osascript)
 		}}}
 
-func bestBrowser(list browserSlice) browser {
-	sort.Sort(list)
-	return list[0]
+//BestBrowser returns the browser with the highest ranking
+func BestBrowser(list []Browser) Browser {
+	lst := (browserSlice)(list)
+	sort.Sort(lst)
+	return lst[0]
 }
 
-//returns slice of browsers that work on the user's machine
-//returns nil if unknown OS is runnings
-func getBrowsers() []browser {
+//GetInstalled returns slice of Browsers that work on the user's machine, or nil if unknown OS is running
+func GetInstalled() []Browser {
 	switch runtime.GOOS {
-	case "darwin":
-		return macos()
-	case "freebsd", "linux":
-		return linux()
+	case "freebsd", "linux", "darwin":
+		return envLookup(":")
 	case "windows":
-		return windows()
+		return envLookup(";")
 	}
 	return nil
 }
 
-//TODO: Find more ways to find browsers on linux
-func linux() []browser {
-	out, err := spawnCmd("xdg-mime query default x-scheme-handler/http") //firefox.desktop
-	if err != nil {
-		fmt.Println(err)
-		return nil
+func envLookup(splitter string) []Browser {
+	//searches the directories in $PATH
+	path := strings.Split(os.Getenv("PATH"), ":")
+	browserKeys := reflect.ValueOf(Browsers).MapKeys()
+
+	valid := browserSlice{}
+	alreadyLogged := map[string]bool{}
+
+	//iterate dirs in $PATH
+	for _, d := range path {
+		files, _ := ioutil.ReadDir(d)
+		//iterate files
+		for _, f := range files {
+			//iterate Browsers
+			for _, b := range browserKeys {
+				//if file == Browser
+				if f.Name() == b.String() {
+					//if not already logged
+					if _, ok := alreadyLogged[f.Name()]; !ok {
+						alreadyLogged[f.Name()] = true
+						valid = append(valid, Browsers[b.String()])
+					}
+				}
+			}
+		}
 	}
-	return []browser{
-		browsers[out[:len(out)-8]]}
-}
 
-//TODO:
-func macos() []browser {
-	return []browser{browsers["chrome"]}
-}
-
-//TODO:
-func windows() []browser {
-	return []browser{browsers["chrome"]}
+	sort.Sort(valid) //sort according to preference
+	return valid
 }
