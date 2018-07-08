@@ -38,7 +38,7 @@ func (b browserSlice) Less(i, j int) bool {
 }
 
 //Browsers are held in a map, accessible with their 'shorthand' representations
-var Browsers = map[string]Browser{
+var browsers = map[string]Browser{
 	"firefox": Browser{
 		"Firefox",
 		1,
@@ -155,7 +155,7 @@ func GetInstalled() []Browser {
 func envLookup(splitter string) []Browser {
 	//searches the directories in $PATH
 	path := strings.Split(os.Getenv("PATH"), ":")
-	browserKeys := reflect.ValueOf(Browsers).MapKeys()
+	browserKeys := reflect.ValueOf(browsers).MapKeys()
 
 	valid := browserSlice{}
 	alreadyLogged := map[string]bool{}
@@ -172,7 +172,7 @@ func envLookup(splitter string) []Browser {
 					//if not already logged
 					if _, ok := alreadyLogged[f.Name()]; !ok {
 						alreadyLogged[f.Name()] = true
-						valid = append(valid, Browsers[b.String()])
+						valid = append(valid, browsers[b.String()])
 					}
 				}
 			}
